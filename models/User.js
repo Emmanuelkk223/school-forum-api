@@ -1,105 +1,141 @@
-const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const prisma = require('../config/database');
 
-const userSchema = new mongoose.Schema({
-  username: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-    minlength: 3,
-    maxlength: 30
-  },
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-    lowercase: true
-  },
-  password: {
-    type: String,
-    required: true,
-    minlength: 6
-  },
-  firstName: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  lastName: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  role: {
-    type: String,
-    enum: ['student', 'teacher', 'admin'],
-    default: 'student'
-  },
-  grade: {
-    type: String,
-    required: function() {
-      return this.role === 'student';
+class User {
+  // Create a new user
+  static async create(userData) {
+    // Validate required fields based on role
+    if (userData.role === 'STUDENT' && !userData.grade) {
+      throw new Error('Grade is required for students');
     }
-  },
-  subject: {
-    type: String,
-    required: function() {
-      return this.role === 'teacher';
+    if (userData.role === 'TEACHER' && !userData.subject) {
+      throw new Error('Subject is required for teachers');
     }
-  },
-  avatar: {
-    type: String,
-    default: null
-  },
-  bio: {
-    type: String,
-    maxlength: 500
-  },
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-  lastLogin: {
-    type: Date,
-    default: null
-  }
-}, {
-  timestamps: true
-});
 
-// Hash password before saving
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  
-  try {
+    // Hash password
     const salt = await bcrypt.genSalt(12);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error);
+    const hashedPassword = await bcrypt.hash(userData.password, salt);
+
+    // Trim and process data
+    const processedData = {
+      ...userData,
+      username: userData.username?.trim(),
+      email: userData.email?.trim().toLowerCase(),
+      password: hashedPassword,
+      firstName: userData.firstName?.trim(),
+      lastName: userData.lastName?.trim()
+    };
+
+    const user = await prisma.user.create({
+      data: processedData
+    });
+
+    return this.toJSON(user);
   }
-});
 
-// Compare password method
-userSchema.methods.comparePassword = async function(candidatePassword) {
-  return bcrypt.compare(candidatePassword, this.password);
-};
-
-// Get user's full name
-userSchema.virtual('fullName').get(function() {
-  return `${this.firstName} ${this.lastName}`;
-});
-
-// Ensure virtual fields are serialized
-userSchema.set('toJSON', {
-  virtuals: true,
-  transform: function(doc, ret) {
-    delete ret.password;
-    delete ret.__v;
-    return ret;
+  // Find user by ID
+  static async findById(id, includePassword = false) {
+    const user = await prisma.user.findUnique({
+      where: { id }
+    });
+    
+    if (!user) return null;
+    return includePassword ? user : this.toJSON(user);
   }
-});
 
-module.exports = mongoose.model('User', userSchema);
+  // Find user by email
+  static async findByEmail(email, includePassword = false) {
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() }
+    });
+    
+    if (!user) return null;
+    return includePassword ? user : this.toJSON(user);
+  }
+
+  // Find user by username
+  static async findByUsername(username, includePassword = false) {
+    const user = await prisma.user.findUnique({
+      where: { username }
+    });
+    
+    if (!user) return null;
+    return includePassword ? user : this.toJSON(user);
+  }
+
+  // Update user
+  static async findByIdAndUpdate(id, updateData) {
+    // Hash password if being updated
+    if (updateData.password) {
+      const salt = await bcrypt.genSalt(12);
+      updateData.password = await bcrypt.hash(updateData.password, salt);
+    }
+
+    // Process string fields
+    if (updateData.username) updateData.username = updateData.username.trim();
+    if (updateData.email) updateData.email = updateData.email.trim().toLowerCase();
+    if (updateData.firstName) updateData.firstName = updateData.firstName.trim();
+    if (updateData.lastName) updateData.lastName = updateData.lastName.trim();
+
+    const user = await prisma.user.update({
+      where: { id },
+      data: updateData
+    });
+
+    return this.toJSON(user);
+  }
+
+  // Delete user
+  static async findByIdAndDelete(id) {
+    const user = await prisma.user.delete({
+      where: { id }
+    });
+    
+    return this.toJSON(user);
+  }
+
+  // Find all users with optional filters
+  static async find(filters = {}, options = {}) {
+    const { limit, skip, sort } = options;
+    
+    const users = await prisma.user.findMany({
+      where: filters,
+      take: limit,
+      skip: skip,
+      orderBy: sort ? Object.entries(sort).map(([key, value]) => ({ [key]: value === 1 ? 'asc' : 'desc' })) : undefined
+    });
+
+    return users.map(user => this.toJSON(user));
+  }
+
+  // Compare password
+  static async comparePassword(candidatePassword, hashedPassword) {
+    return bcrypt.compare(candidatePassword, hashedPassword);
+  }
+
+  // Update last login
+  static async updateLastLogin(id) {
+    await prisma.user.update({
+      where: { id },
+      data: { lastLogin: new Date() }
+    });
+  }
+
+  // Transform user object for JSON response (remove password, add virtual fields)
+  static toJSON(user) {
+    if (!user) return null;
+    
+    const { password, ...userWithoutPassword } = user;
+    return {
+      ...userWithoutPassword,
+      fullName: `${user.firstName} ${user.lastName}`
+    };
+  }
+
+  // Get user count
+  static async count(filters = {}) {
+    return prisma.user.count({ where: filters });
+  }
+}
+
+module.exports = User;

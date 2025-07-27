@@ -20,37 +20,48 @@ router.post('/register', [
   const { username, email, password, firstName, lastName, role, grade, subject } = req.body;
 
   try {
-    let user = await User.findOne({ email });
-    if (user) {
+    // Check if user already exists
+    let existingUser = await User.findByEmail(email);
+    if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
     }
 
-    user = new User({
+    // Check if username already exists
+    existingUser = await User.findByUsername(username);
+    if (existingUser) {
+      return res.status(400).json({ error: 'Username already taken' });
+    }
+
+    // Convert role to enum format
+    const userRole = role ? role.toUpperCase() : 'STUDENT';
+
+    const user = await User.create({
       username,
       email,
       password,
       firstName,
       lastName,
-      role,
+      role: userRole,
       grade,
       subject
     });
 
-    await user.save();
-
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE });
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
 
     res.status(201).json({
       message: 'User registered successfully',
       token,
       user: {
+        id: user.id,
         username: user.username,
         email: user.email,
-        fullName: user.fullName
+        fullName: user.fullName,
+        role: user.role
       }
     });
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    console.error('Registration error:', error);
+    res.status(500).json({ error: 'Server error: ' + error.message });
   }
 });
 
